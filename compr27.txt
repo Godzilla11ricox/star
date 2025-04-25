@@ -1,0 +1,62 @@
+# Cell 27: Compare same store sales YoY and flag merchants without prior year data
+
+# Create a DataFrame with prior year data
+prior_year_df = gbs_mids_grouped_1.select(
+    F.col("state").alias("prior_state"),
+    F.col("naics3").alias("prior_naics3"),
+    F.substring("txn_year_month", 1, 4).cast("int").alias("prior_year"),
+    F.substring("txn_year_month", 5, 2).cast("int").alias("month"),
+    F.col("merchant_key_count").alias("prior_merchant_count"),
+    F.col("total_tran_amount").alias("prior_year_amount")
+)
+
+# Add year and month columns to current data
+current_df = gbs_mids_grouped_1.select(
+    "state",
+    "naics3",
+    "txn_year_month",
+    "total_tran_amount",
+    "merchant_key_count",
+    F.substring("txn_year_month", 1, 4).cast("int").alias("year"),
+    F.substring("txn_year_month", 5, 2).cast("int").alias("month")
+)
+
+# Create a column for the expected prior year
+current_df = current_df.withColumn("expected_prior_year", F.col("year") - 1)
+
+# Join current data with prior year data on state, naics3, and month
+yoy_comparison = current_df.join(
+    prior_year_df,
+    (current_df.state == prior_year_df.prior_state) &
+    (current_df.naics3 == prior_year_df.prior_naics3) &
+    (current_df.month == prior_year_df.month) &
+    (current_df.expected_prior_year == prior_year_df.prior_year),
+    "left"
+)
+
+# Create flag for merchants without prior year data
+yoy_comparison = yoy_comparison.withColumn(
+    "has_prior_year_data",
+    F.when(F.col("prior_year_amount").isNotNull(), True).otherwise(False)
+)
+
+# Calculate YoY growth rate for those with prior year data
+yoy_comparison = yoy_comparison.withColumn(
+    "yoy_growth_rate",
+    F.when(
+        F.col("prior_year_amount").isNotNull() & (F.col("prior_year_amount") != 0),
+        (F.col("total_tran_amount") - F.col("prior_year_amount")) / F.col("prior_year_amount")
+    ).otherwise(None)
+)
+
+# Display results
+display(yoy_comparison.select(
+    "state", "naics3", "txn_year_month", "year", "month", 
+    "total_tran_amount", "prior_year_amount", 
+    "merchant_key_count", "prior_merchant_count",
+    "has_prior_year_data", "yoy_growth_rate"
+).orderBy("state", "naics3", "txn_year_month"))
+
+# Create a summary of merchants without prior year data by state and NAICS
+no_prior_year_summary = yoy_comparison.filter(~F.col("has_prior_year_data")).groupBy("state", "naics3").count()
+display(no_prior_year_summary.orderBy(F.desc("count")))
